@@ -46,6 +46,7 @@ const COLORS = {
   axis: "#475569",
   grid: "#e2e8f0",
   bar: "#2563eb",
+  bar2: "#7c3aed",
 };
 
 export default function App() {
@@ -54,6 +55,7 @@ export default function App() {
   const [status, setStatus] = useState("Envie arquivos CSV, XLSX, DOCX ou PDF.");
   const [fileNames, setFileNames] = useState([]);
   const [errors, setErrors] = useState([]);
+  const [selectedTower, setSelectedTower] = useState("CONSOLIDADO");
 
   async function handleFile(e) {
     const files = Array.from(e.target.files || []);
@@ -77,6 +79,7 @@ export default function App() {
           const text = await file.text();
           const parsed = parseCSV(text).map((r) => ({
             ...r,
+            torre: sanitize(r.torre || extractTower(file.name, JSON.stringify(r)) || "SEM TORRE"),
             fonte: file.name,
           }));
           allRows = [...allRows, ...parsed];
@@ -89,6 +92,7 @@ export default function App() {
           const sheet = workbook.Sheets[workbook.SheetNames[0]];
           const json = XLSX.utils.sheet_to_json(sheet, { defval: "" }).map((r) => ({
             ...r,
+            torre: sanitize(r.torre || extractTower(file.name, JSON.stringify(r)) || "SEM TORRE"),
             fonte: file.name,
           }));
           allRows = [...allRows, ...json];
@@ -138,8 +142,18 @@ export default function App() {
     );
   }
 
+  const towers = useMemo(() => {
+    const unique = [...new Set(rows.map((r) => sanitize(r.torre)).filter(Boolean))].sort();
+    return ["CONSOLIDADO", ...unique];
+  }, [rows]);
+
+  const scopedRows = useMemo(() => {
+    if (selectedTower === "CONSOLIDADO") return rows;
+    return rows.filter((r) => sanitize(r.torre) === selectedTower);
+  }, [rows, selectedTower]);
+
   const metrics = useMemo(() => {
-    const validRows = rows.filter((r) =>
+    const validRows = scopedRows.filter((r) =>
       ["A", "R", "NV", "NA"].includes(normResult(r.resultado))
     );
 
@@ -160,6 +174,7 @@ export default function App() {
           apto,
           pav: inferPavimento(apto),
           data: r.data || "",
+          torre: r.torre || "",
           verificacoes: 0,
           ncs: 0,
           criteriosSet: new Set(),
@@ -181,6 +196,7 @@ export default function App() {
         apto: item.apto,
         pav: item.pav,
         data: item.data,
+        torre: item.torre,
         verificacoes: item.verificacoes,
         ncs: item.ncs,
         percentual: item.verificacoes
@@ -229,6 +245,44 @@ export default function App() {
       reprovedApartments: apartmentTable.filter((x) => x.status === "REPROVADO").length,
       approvedApartments: apartmentTable.filter((x) => x.status === "APROVADO").length,
     };
+  }, [scopedRows]);
+
+  const consolidatedByTower = useMemo(() => {
+    const map = {};
+    rows.forEach((r) => {
+      const torre = sanitize(r.torre || "SEM TORRE");
+      if (!map[torre]) {
+        map[torre] = {
+          torre,
+          approved: 0,
+          reproved: 0,
+          nv: 0,
+          na: 0,
+          apartments: new Set(),
+        };
+      }
+      const rr = normResult(r.resultado);
+      if (rr === "A") map[torre].approved += 1;
+      if (rr === "R") map[torre].reproved += 1;
+      if (rr === "NV") map[torre].nv += 1;
+      if (rr === "NA") map[torre].na += 1;
+      if (r.apto) map[torre].apartments.add(r.apto);
+    });
+
+    return Object.values(map)
+      .map((item) => {
+        const totalAR = item.approved + item.reproved;
+        return {
+          torre: item.torre,
+          apartamentos: item.apartments.size,
+          approved: item.approved,
+          reproved: item.reproved,
+          nv: item.nv,
+          na: item.na,
+          tapi: totalAR ? Math.round((item.approved / totalAR) * 100) : 0,
+        };
+      })
+      .sort((a, b) => a.torre.localeCompare(b.torre));
   }, [rows]);
 
   const statusChartData = [
@@ -238,8 +292,13 @@ export default function App() {
     { label: "N/A", value: metrics.na, color: COLORS.na },
   ];
 
-  const paretoSvg = buildParetoSVG(metrics.pareto);
-  const statusSvg = buildStatusSVG(statusChartData);
+  const scopeLabel =
+    selectedTower === "CONSOLIDADO" ? "Consolidado de todas as torres" : `Torre ${selectedTower}`;
+
+  const paretoSvg = buildParetoSVG(metrics.pareto, `Pareto de critérios mais reprovados — ${scopeLabel}`);
+  const statusSvg = buildStatusSVG(statusChartData, `Distribuição de resultados — ${scopeLabel}`);
+
+  const reportText = buildCombinedReport(rows, consolidatedByTower, metrics, selectedTower);
 
   return (
     <div
@@ -268,11 +327,11 @@ export default function App() {
         </div>
 
         <h1 style={{ fontSize: "44px", marginBottom: "12px" }}>
-          Dashboard automático de FVS
+          Dashboard automático de FVS por torre
         </h1>
 
         <p style={{ fontSize: "18px", color: "#cbd5e1", lineHeight: 1.6 }}>
-          Esta versão monta dashboard, tabelas e gráficos exportáveis em SVG e PNG.
+          Esta versão separa por torre, mantém o consolidado e gera relatório conjunto.
         </p>
 
         <div
@@ -300,7 +359,27 @@ export default function App() {
             </ul>
           </div>
 
-          <div>
+          <div style={{ marginTop: 16 }}>
+            <strong>Visualização:</strong>{" "}
+            <select
+              value={selectedTower}
+              onChange={(e) => setSelectedTower(e.target.value)}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #cbd5e1",
+                marginLeft: 8,
+              }}
+            >
+              {towers.map((tower) => (
+                <option key={tower} value={tower}>
+                  {tower === "CONSOLIDADO" ? "Consolidado" : `Torre ${tower}`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginTop: 16 }}>
             <strong>Status:</strong> {status}
           </div>
 
@@ -324,7 +403,7 @@ export default function App() {
             marginTop: "28px",
           }}
         >
-          <Card title="APTOS INSPECIONADOS" value={metrics.apartments} subtitle="FVS consolidadas" />
+          <Card title="APTOS INSPECIONADOS" value={metrics.apartments} subtitle={scopeLabel} />
           <Card title="TAPI" value={`${metrics.tapi}%`} subtitle="Meta ≥ 85%" />
           <Card
             title="REPROVADOS"
@@ -343,18 +422,18 @@ export default function App() {
           }}
         >
           <ChartCard
-            title="Pareto de critérios mais reprovados"
+            title={`Pareto — ${scopeLabel}`}
             svg={paretoSvg}
-            baseName="pareto_criterios_reprovados"
+            baseName={`pareto_${slugify(scopeLabel)}`}
           />
           <ChartCard
-            title="Distribuição de resultados"
+            title={`Resultados — ${scopeLabel}`}
             svg={statusSvg}
-            baseName="distribuicao_resultados"
+            baseName={`resultados_${slugify(scopeLabel)}`}
           />
         </div>
 
-        {metrics.pareto.length > 0 && (
+        {consolidatedByTower.length > 0 && (
           <div
             style={{
               marginTop: 28,
@@ -362,23 +441,32 @@ export default function App() {
               color: COLORS.text,
               borderRadius: 20,
               padding: 24,
+              overflowX: "auto",
             }}
           >
-            <h2 style={{ marginTop: 0 }}>Pareto de critérios mais reprovados</h2>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <h2 style={{ marginTop: 0 }}>Resumo consolidado por torre</h2>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
               <thead>
                 <tr>
-                  <th style={thStyle}>Critério</th>
-                  <th style={thStyle}>Reprovações</th>
-                  <th style={thStyle}>Taxa</th>
+                  <th style={thStyle}>Torre</th>
+                  <th style={thStyle}>Apartamentos</th>
+                  <th style={thStyle}>Aprovadas</th>
+                  <th style={thStyle}>Reprovadas</th>
+                  <th style={thStyle}>N/V</th>
+                  <th style={thStyle}>N/A</th>
+                  <th style={thStyle}>TAPI</th>
                 </tr>
               </thead>
               <tbody>
-                {metrics.pareto.map((item, i) => (
+                {consolidatedByTower.map((item, i) => (
                   <tr key={i}>
-                    <td style={tdStyle}>{item.criterio}</td>
-                    <td style={tdStyle}>{item.reprovacoes}</td>
-                    <td style={tdStyle}>{item.taxa}%</td>
+                    <td style={tdStyle}>{item.torre}</td>
+                    <td style={tdStyle}>{item.apartamentos}</td>
+                    <td style={tdStyle}>{item.approved}</td>
+                    <td style={tdStyle}>{item.reproved}</td>
+                    <td style={tdStyle}>{item.nv}</td>
+                    <td style={tdStyle}>{item.na}</td>
+                    <td style={tdStyle}>{item.tapi}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -397,10 +485,13 @@ export default function App() {
               overflowX: "auto",
             }}
           >
-            <h2 style={{ marginTop: 0 }}>Resultado por apartamento</h2>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <h2 style={{ marginTop: 0 }}>
+              Resultado por apartamento — {scopeLabel}
+            </h2>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
               <thead>
                 <tr>
+                  <th style={thStyle}>Torre</th>
                   <th style={thStyle}>Apto</th>
                   <th style={thStyle}>Pav.</th>
                   <th style={thStyle}>Data</th>
@@ -414,6 +505,7 @@ export default function App() {
               <tbody>
                 {metrics.apartmentTable.map((item, i) => (
                   <tr key={i}>
+                    <td style={tdStyle}>{selectedTower === "CONSOLIDADO" ? item.torre || "—" : selectedTower}</td>
                     <td style={tdStyle}>{item.apto}</td>
                     <td style={tdStyle}>{item.pav}</td>
                     <td style={tdStyle}>{item.data}</td>
@@ -429,6 +521,45 @@ export default function App() {
           </div>
         )}
 
+        {reportText && (
+          <div
+            style={{
+              marginTop: 28,
+              background: "white",
+              color: COLORS.text,
+              borderRadius: 20,
+              padding: 24,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <h2 style={{ marginTop: 0 }}>Relatório {selectedTower === "CONSOLIDADO" ? "conjunto" : `da Torre ${selectedTower}`}</h2>
+              <button
+                style={btnStyle}
+                onClick={() =>
+                  downloadText(
+                    reportText,
+                    selectedTower === "CONSOLIDADO"
+                      ? "relatorio_conjunto_torres.txt"
+                      : `relatorio_torre_${slugify(selectedTower)}.txt`
+                  )
+                }
+              >
+                Baixar relatório
+              </button>
+            </div>
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                fontSize: 14,
+                lineHeight: 1.6,
+              }}
+            >
+              {reportText}
+            </pre>
+          </div>
+        )}
+
         {rows.length > 0 && (
           <div
             style={{
@@ -441,7 +572,7 @@ export default function App() {
             }}
           >
             <h2 style={{ marginTop: 0 }}>Linhas estruturadas</h2>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
               <thead>
                 <tr>
                   {Object.keys(rows[0]).map((key) => (
@@ -450,7 +581,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 80).map((row, i) => (
+                {rows.slice(0, 120).map((row, i) => (
                   <tr key={i}>
                     {Object.values(row).map((val, j) => (
                       <td key={j} style={tdStyle}>{String(val)}</td>
@@ -578,7 +709,7 @@ const btnStyle = {
   fontWeight: "bold",
 };
 
-function buildParetoSVG(data) {
+function buildParetoSVG(data, title) {
   const width = 1100;
   const height = 620;
   const left = 220;
@@ -619,13 +750,13 @@ function buildParetoSVG(data) {
   return `
   <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <rect width="100%" height="100%" fill="white"/>
-    <text x="40" y="30" font-size="28" font-weight="bold" fill="#0f172a">Pareto de critérios mais reprovados</text>
+    <text x="40" y="30" font-size="28" font-weight="bold" fill="#0f172a">${escapeXml(title)}</text>
     ${grid}
     ${bars}
   </svg>`;
 }
 
-function buildStatusSVG(data) {
+function buildStatusSVG(data, title) {
   const width = 1100;
   const height = 620;
   const cx = 320;
@@ -669,7 +800,7 @@ function buildStatusSVG(data) {
   return `
   <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <rect width="100%" height="100%" fill="white"/>
-    <text x="40" y="30" font-size="28" font-weight="bold" fill="#0f172a">Distribuição de resultados</text>
+    <text x="40" y="30" font-size="28" font-weight="bold" fill="#0f172a">${escapeXml(title)}</text>
     ${slices}
     <circle cx="${cx}" cy="${cy}" r="72" fill="white"/>
     <text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="26" font-weight="bold" fill="#0f172a">${total}</text>
@@ -725,6 +856,16 @@ function downloadPNG(svgText, filename, width = 1200, height = 700) {
   img.src = url;
 }
 
+function downloadText(text, filename) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function escapeXml(value) {
   return String(value || "")
     .replaceAll("&", "&amp;")
@@ -775,6 +916,7 @@ function cleanCSV(value) {
 
 function parseFvsText(fileName, rawText) {
   const text = normalizeSpaces(rawText);
+  const torre = extractTower(fileName, text) || "SEM TORRE";
 
   const apto =
     extractFirst(fileName, /apto\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
@@ -804,6 +946,7 @@ function parseFvsText(fileName, rawText) {
 
     for (let i = 0; i < Math.min(tokens.length, AMBIENTES_PADRAO.length); i += 1) {
       parsedRows.push({
+        torre,
         apto: sanitize(apto),
         pav: inferPavimento(apto),
         data,
@@ -825,6 +968,15 @@ function findCriterionSegment(text, criterio) {
   const idx = text.toLowerCase().indexOf(criterio.toLowerCase());
   if (idx === -1) return "";
   return text.slice(idx, idx + 320);
+}
+
+function extractTower(fileName, text) {
+  return (
+    extractFirst(fileName, /torre\s*([A-Za-z0-9]+)/i) ||
+    extractFirst(text, /torre\s*:?\s*([A-Za-z0-9]+)/i) ||
+    extractFirst(text, /bloco\s*:?\s*([A-Za-z0-9]+)/i) ||
+    ""
+  ).toUpperCase();
 }
 
 function extractFirst(text, regex) {
@@ -863,4 +1015,54 @@ function inferPavimento(apto) {
 
 function sanitize(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function slugify(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildCombinedReport(allRows, consolidatedByTower, metrics, selectedTower) {
+  const scopeLabel =
+    selectedTower === "CONSOLIDADO" ? "CONJUNTO DE TODAS AS TORRES" : `TORRE ${selectedTower}`;
+
+  const topPareto = metrics.pareto
+    .map((x) => `- ${x.criterio}: ${x.reprovacoes} reprovações (${x.taxa}%)`)
+    .join("\n");
+
+  const byTowerText = consolidatedByTower
+    .map(
+      (t) =>
+        `- Torre ${t.torre}: ${t.apartamentos} aptos, ${t.reproved} R, ${t.approved} A, ${t.nv} NV, ${t.na} NA, TAPI ${t.tapi}%`
+    )
+    .join("\n");
+
+  return `RELATÓRIO AUTOMÁTICO DE FVS
+
+ESCOPO
+${scopeLabel}
+
+RESUMO GERAL
+- Aptos inspecionados: ${metrics.apartments}
+- Aprovadas: ${metrics.approved}
+- Reprovadas: ${metrics.reproved}
+- Não verificadas: ${metrics.nv}
+- Não aplicáveis: ${metrics.na}
+- TAPI: ${metrics.tapi}%
+- Total de NCs: ${metrics.totalNCs}
+
+PARETO DOS CRITÉRIOS MAIS REPROVADOS
+${topPareto || "- Sem dados suficientes."}
+
+CONSOLIDADO POR TORRE
+${byTowerText || "- Sem torres identificadas."}
+
+OBSERVAÇÃO
+- Arquivos consolidados: ${new Set(allRows.map((r) => r.fonte).filter(Boolean)).size}
+- Linhas estruturadas: ${allRows.length}
+`;
 }
