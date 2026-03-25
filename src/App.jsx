@@ -628,4 +628,4 @@ function inferPavimento(apto) {
 function sanitize(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
-ta certo assim? 
+
