@@ -46,7 +46,6 @@ const COLORS = {
   axis: "#475569",
   grid: "#e2e8f0",
   bar: "#2563eb",
-  bar2: "#7c3aed",
 };
 
 export default function App() {
@@ -111,7 +110,7 @@ export default function App() {
           const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
 
           let pdfText = "";
-          for (let p = 1; p <= pdf.numPages; p++) {
+          for (let p = 1; p <= pdf.numPages; p += 1) {
             const page = await pdf.getPage(p);
             const content = await page.getTextContent();
             const text = content.items.map((i) => i.str).join(" ");
@@ -211,10 +210,10 @@ export default function App() {
     const pareto = Object.entries(criteriosMap)
       .map(([criterio, vals]) => ({
         criterio,
-        reprovações: vals.r,
+        reprovacoes: vals.r,
         taxa: vals.total ? Math.round((vals.r / vals.total) * 100) : 0,
       }))
-      .sort((a, b) => b.reprovações - a.reprovações)
+      .sort((a, b) => b.reprovacoes - a.reprovacoes)
       .slice(0, 8);
 
     return {
@@ -273,7 +272,7 @@ export default function App() {
         </h1>
 
         <p style={{ fontSize: "18px", color: "#cbd5e1", lineHeight: 1.6 }}>
-          Esta versão já monta dashboard, tabelas e gráficos exportáveis em SVG e PNG.
+          Esta versão monta dashboard, tabelas e gráficos exportáveis em SVG e PNG.
         </p>
 
         <div
@@ -378,7 +377,7 @@ export default function App() {
                 {metrics.pareto.map((item, i) => (
                   <tr key={i}>
                     <td style={tdStyle}>{item.criterio}</td>
-                    <td style={tdStyle}>{item.reprovações}</td>
+                    <td style={tdStyle}>{item.reprovacoes}</td>
                     <td style={tdStyle}>{item.taxa}%</td>
                   </tr>
                 ))}
@@ -530,13 +529,23 @@ function ChartCard({ title, svg, baseName }) {
         padding: 24,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+        }}
+      >
         <h2 style={{ marginTop: 0, marginBottom: 16 }}>{title}</h2>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={btnStyle} onClick={() => downloadSVG(svg, `${baseName}.svg`)}>
             Baixar SVG
           </button>
-          <button style={btnStyle} onClick={() => downloadPNG(svg, `${baseName}.png`, 1200, 700)}>
+          <button
+            style={btnStyle}
+            onClick={() => downloadPNG(svg, `${baseName}.png`, 1200, 700)}
+          >
             Baixar PNG
           </button>
         </div>
@@ -579,19 +588,19 @@ function buildParetoSVG(data) {
   const chartW = width - left - right;
   const chartH = height - top - bottom;
 
-  const maxVal = Math.max(...data.map((d) => d.reprovações), 1);
+  const maxVal = Math.max(...data.map((d) => d.reprovacoes), 1);
   const barH = Math.min(48, chartH / Math.max(data.length, 1) - 10);
 
   const bars = data
     .map((d, i) => {
       const y = top + i * (barH + 14);
-      const w = (d.reprovações / maxVal) * chartW;
+      const w = (d.reprovacoes / maxVal) * chartW;
       return `
         <text x="${left - 12}" y="${y + barH / 2 + 6}" font-size="18" text-anchor="end" fill="#0f172a">${escapeXml(
           d.criterio
         )}</text>
         <rect x="${left}" y="${y}" width="${w}" height="${barH}" rx="8" fill="${COLORS.bar}" />
-        <text x="${left + w + 10}" y="${y + barH / 2 + 6}" font-size="18" fill="#0f172a">${d.reprovações} (${d.taxa}%)</text>
+        <text x="${left + w + 10}" y="${y + barH / 2 + 6}" font-size="18" fill="#0f172a">${d.reprovacoes} (${d.taxa}%)</text>
       `;
     })
     .join("");
@@ -641,7 +650,7 @@ function buildStatusSVG(data) {
       currentAngle += angle;
       return { ...d, path };
     })
-    .map((d, i) => {
+    .map((d) => {
       return `<path d="${d.path}" fill="${d.color}" stroke="white" stroke-width="3"/>`;
     })
     .join("");
@@ -670,7 +679,7 @@ function buildStatusSVG(data) {
 }
 
 function polarToCartesian(cx, cy, r, angleDeg) {
-  const angleRad = ((angleDeg - 90) * Math.PI) / 180.0;
+  const angleRad = ((angleDeg - 90) * Math.PI) / 180;
   return {
     x: cx + r * Math.cos(angleRad),
     y: cy + r * Math.sin(angleRad),
@@ -772,92 +781,6 @@ function parseFvsText(fileName, rawText) {
     extractFirst(text, /Local da inspeção\s*:?\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
     "";
 
-  const data = extractFirst(text, /DATA\s*:?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i) || "";
-
-  const responsavel =
-    extractFirst(text, /Responsável\s*:?\s*([A-Za-zÀ-ÿ ]{3,80})/i) || "";
-
-  const servico =
-    extractFirst(
-      text,
-      /Serviço\s*:?\s*([A-Za-zÀ-ÿ0-9 ,\\-]+?)(?=Responsável|Local da inspeção|INSPEÇÕES)/i
-    ) || "Revestimento Cerâmico";
-
-  const rows = [];
-
-  for (const criterio of CRITERIOS) {
-    const match = findCriterionSegment(text, criterio);
-    if (!match) continue;
-
-    const tokens = extractResultTokens(match);
-    if (!tokens.length) continue;
-
-    for (let i = 0; i < Math.min(tokens.length, AMBIENTES_PADRAO.length); i += 1) {
-      rows.push({
-        apto: sanitize(apto),
-        pav: inferPavimento(apto),
-        data,
-        ambiente: AMBIENTES_PADRAO[i],
-        criterio,
-        resultado: normResult(tokens[i]),
-        observacao: "",
-        equipe: responsavel,
-        servico: sanitize(servico),
-        fonte: fileName,
-      });
-    }
-  }
-
-  return rows;
-}
-
-function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
-  const headers = splitCSVLine(lines[0]);
-  return lines.slice(1).map((line) => {
-    const values = splitCSVLine(line);
-    const obj = {};
-    headers.forEach((h, i) => {
-      obj[h] = values[i] || "";
-    });
-    return obj;
-  });
-}
-
-function splitCSVLine(line) {
-  const result = [];
-  let current = "";
-  let insideQuotes = false;
-
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-    if (char === '"') {
-      insideQuotes = !insideQuotes;
-    } else if (char === "," && !insideQuotes) {
-      result.push(cleanCSV(current));
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  result.push(cleanCSV(current));
-  return result;
-}
-
-function cleanCSV(value) {
-  return value.replace(/^"|"$/g, "").trim();
-}
-
-function parseFvsText(fileName, rawText) {
-  const text = normalizeSpaces(rawText);
-
-  const apto =
-    extractFirst(fileName, /apto\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
-    extractFirst(text, /Local da inspeção\s*:?\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
-    "";
-
   const data =
     extractFirst(text, /DATA\s*:?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i) || "";
 
@@ -870,7 +793,7 @@ function parseFvsText(fileName, rawText) {
       /Serviço\s*:?\s*([A-Za-zÀ-ÿ0-9 ,\-]+?)(?=Responsável|Local da inspeção|INSPEÇÕES)/i
     ) || "Revestimento Cerâmico";
 
-  const rows = [];
+  const parsedRows = [];
 
   for (const criterio of CRITERIOS) {
     const match = findCriterionSegment(text, criterio);
@@ -880,7 +803,7 @@ function parseFvsText(fileName, rawText) {
     if (!tokens.length) continue;
 
     for (let i = 0; i < Math.min(tokens.length, AMBIENTES_PADRAO.length); i += 1) {
-      rows.push({
+      parsedRows.push({
         apto: sanitize(apto),
         pav: inferPavimento(apto),
         data,
@@ -895,7 +818,7 @@ function parseFvsText(fileName, rawText) {
     }
   }
 
-  return rows;
+  return parsedRows;
 }
 
 function findCriterionSegment(text, criterio) {
