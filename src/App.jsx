@@ -811,45 +811,23 @@ function parseFvsText(fileName, rawText) {
   return rows;
 }
 
-function findCriterionSegment(text, criterio) {
-  const idx = text.toLowerCase().indexOf(criterio.toLowerCase());
-  if (idx === -1) return "";
-  return text.slice(idx, idx + 320);
-}
-
 function extractResultTokens(segment) {
-  const matches = segment.match(/N\\/V|N\\/A|\\bA\\b|\\bR\\b|-/gi) || [];
+  const matches = segment.match(/N\/V|N\/A|\bA\b|\bR\b|-/gi) || [];
   return matches.map((m) => m.toUpperCase());
-}
-
-function normResult(value) {
-  const v = String(value || "").trim().toUpperCase();
-  if (v === "A") return "A";
-  if (v === "R") return "R";
-  if (v === "N/V" || v === "NV") return "NV";
-  if (v === "N/A" || v === "NA" || v === "-") return "NA";
-  return v;
-}
-
-function extractFirst(text, regex) {
-  const match = String(text || "").match(regex);
-  return match?.[1]?.trim() || "";
 }
 
 function normalizeSpaces(value) {
   return String(value || "")
-    .replace(/[\\t\\r]+/g, " ")
-    .replace(/\\n+/g, " ")
+    .replace(/[\t\r]+/g, " ")
+    .replace(/\n+/g, " ")
     .replace(/ {2,}/g, " ")
     .trim();
 }
 
 function inferPavimento(apto) {
-  const num = Number(String(apto).match(/\\d{3,4}/)?.[0] || "0");
-  if (!num) return "";
-  return `${Math.floor(num / 100)}º`;
-}
+  const match = String(apto).match(/\d{3,4}/);
+  if (!match) return "";
 
-function sanitize(value) {
-  return String(value || "").replace(/\\s+/g, " ").trim();
+  const num = Number(match[0]);
+  return `${Math.floor(num / 100)}º`;
 }
