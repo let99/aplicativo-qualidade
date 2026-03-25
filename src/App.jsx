@@ -46,7 +46,6 @@ const COLORS = {
   axis: "#475569",
   grid: "#e2e8f0",
   bar: "#2563eb",
-  bar2: "#7c3aed",
 };
 
 export default function App() {
@@ -80,6 +79,7 @@ export default function App() {
           const parsed = parseCSV(text).map((r) => ({
             ...r,
             torre: sanitize(r.torre || extractTower(file.name, JSON.stringify(r)) || "SEM TORRE"),
+            apto: sanitize(r.apto || extractApto(file.name, JSON.stringify(r)) || ""),
             fonte: file.name,
           }));
           allRows = [...allRows, ...parsed];
@@ -93,6 +93,7 @@ export default function App() {
           const json = XLSX.utils.sheet_to_json(sheet, { defval: "" }).map((r) => ({
             ...r,
             torre: sanitize(r.torre || extractTower(file.name, JSON.stringify(r)) || "SEM TORRE"),
+            apto: sanitize(r.apto || extractApto(file.name, JSON.stringify(r)) || ""),
             fonte: file.name,
           }));
           allRows = [...allRows, ...json];
@@ -157,7 +158,14 @@ export default function App() {
       ["A", "R", "NV", "NA"].includes(normResult(r.resultado))
     );
 
-    const apartments = [...new Set(validRows.map((r) => r.apto).filter(Boolean))];
+    const apartments = [
+      ...new Set(
+        validRows
+          .map((r) => `${sanitize(r.torre || "SEM TORRE")}-${sanitize(r.apto || "")}`)
+          .filter((x) => x !== "SEM TORRE-")
+      ),
+    ];
+
     const approved = validRows.filter((r) => normResult(r.resultado) === "A").length;
     const reproved = validRows.filter((r) => normResult(r.resultado) === "R").length;
     const nv = validRows.filter((r) => normResult(r.resultado) === "NV").length;
@@ -169,12 +177,16 @@ export default function App() {
     const byApto = {};
     validRows.forEach((r) => {
       const apto = r.apto || "Sem apto";
-      if (!byApto[apto]) {
-        byApto[apto] = {
+      const torre = sanitize(r.torre || "SEM TORRE");
+      const unidadeKey = `${torre}-${apto}`;
+
+      if (!byApto[unidadeKey]) {
+        byApto[unidadeKey] = {
+          unidadeKey,
           apto,
           pav: inferPavimento(apto),
           data: r.data || "",
-          torre: r.torre || "",
+          torre,
           verificacoes: 0,
           ncs: 0,
           criteriosSet: new Set(),
@@ -182,17 +194,18 @@ export default function App() {
       }
 
       if (normResult(r.resultado) !== "NA") {
-        byApto[apto].verificacoes += 1;
+        byApto[unidadeKey].verificacoes += 1;
       }
 
       if (normResult(r.resultado) === "R") {
-        byApto[apto].ncs += 1;
-        byApto[apto].criteriosSet.add(r.criterio);
+        byApto[unidadeKey].ncs += 1;
+        byApto[unidadeKey].criteriosSet.add(r.criterio);
       }
     });
 
     const apartmentTable = Object.values(byApto)
       .map((item) => ({
+        unidadeKey: item.unidadeKey,
         apto: item.apto,
         pav: item.pav,
         data: item.data,
@@ -205,11 +218,16 @@ export default function App() {
         criterios: Array.from(item.criteriosSet).slice(0, 4).join(", "),
         status: item.ncs > 0 ? "REPROVADO" : "APROVADO",
       }))
-      .sort(
-        (a, b) =>
+      .sort((a, b) => {
+        const ta = String(a.torre || "");
+        const tb = String(b.torre || "");
+        if (ta !== tb) return ta.localeCompare(tb);
+
+        return (
           Number(String(a.apto).match(/\d+/)?.[0] || 0) -
           Number(String(b.apto).match(/\d+/)?.[0] || 0)
-      );
+        );
+      });
 
     const criteriosMap = {};
     validRows.forEach((r) => {
@@ -266,7 +284,7 @@ export default function App() {
       if (rr === "R") map[torre].reproved += 1;
       if (rr === "NV") map[torre].nv += 1;
       if (rr === "NA") map[torre].na += 1;
-      if (r.apto) map[torre].apartments.add(r.apto);
+      if (r.apto) map[torre].apartments.add(`${torre}-${r.apto}`);
     });
 
     return Object.values(map)
@@ -293,10 +311,18 @@ export default function App() {
   ];
 
   const scopeLabel =
-    selectedTower === "CONSOLIDADO" ? "Consolidado de todas as torres" : `Torre ${selectedTower}`;
+    selectedTower === "CONSOLIDADO"
+      ? "Consolidado de todas as torres"
+      : `Torre ${selectedTower}`;
 
-  const paretoSvg = buildParetoSVG(metrics.pareto, `Pareto de critérios mais reprovados — ${scopeLabel}`);
-  const statusSvg = buildStatusSVG(statusChartData, `Distribuição de resultados — ${scopeLabel}`);
+  const paretoSvg = buildParetoSVG(
+    metrics.pareto,
+    `Pareto de critérios mais reprovados — ${scopeLabel}`
+  );
+  const statusSvg = buildStatusSVG(
+    statusChartData,
+    `Distribuição de resultados — ${scopeLabel}`
+  );
 
   const reportText = buildCombinedReport(rows, consolidatedByTower, metrics, selectedTower);
 
@@ -505,7 +531,7 @@ export default function App() {
               <tbody>
                 {metrics.apartmentTable.map((item, i) => (
                   <tr key={i}>
-                    <td style={tdStyle}>{selectedTower === "CONSOLIDADO" ? item.torre || "—" : selectedTower}</td>
+                    <td style={tdStyle}>{item.torre || "—"}</td>
                     <td style={tdStyle}>{item.apto}</td>
                     <td style={tdStyle}>{item.pav}</td>
                     <td style={tdStyle}>{item.data}</td>
@@ -532,7 +558,9 @@ export default function App() {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <h2 style={{ marginTop: 0 }}>Relatório {selectedTower === "CONSOLIDADO" ? "conjunto" : `da Torre ${selectedTower}`}</h2>
+              <h2 style={{ marginTop: 0 }}>
+                Relatório {selectedTower === "CONSOLIDADO" ? "conjunto" : `da Torre ${selectedTower}`}
+              </h2>
               <button
                 style={btnStyle}
                 onClick={() =>
@@ -581,7 +609,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 120).map((row, i) => (
+                {rows.slice(0, 150).map((row, i) => (
                   <tr key={i}>
                     {Object.values(row).map((val, j) => (
                       <td key={j} style={tdStyle}>{String(val)}</td>
@@ -917,11 +945,7 @@ function cleanCSV(value) {
 function parseFvsText(fileName, rawText) {
   const text = normalizeSpaces(rawText);
   const torre = extractTower(fileName, text) || "SEM TORRE";
-
-  const apto =
-    extractFirst(fileName, /apto\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
-    extractFirst(text, /Local da inspeção\s*:?\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
-    "";
+  const apto = extractApto(fileName, text);
 
   const data =
     extractFirst(text, /DATA\s*:?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i) || "";
@@ -972,16 +996,31 @@ function findCriterionSegment(text, criterio) {
 
 function extractTower(fileName, text) {
   return (
-    extractFirst(fileName, /torre\s*([A-Za-z0-9]+)/i) ||
-    extractFirst(text, /torre\s*:?\s*([A-Za-z0-9]+)/i) ||
-    extractFirst(text, /bloco\s*:?\s*([A-Za-z0-9]+)/i) ||
+    extractFirst(fileName, /torre\s*([A-Za-z0-9]+)/i, 1) ||
+    extractFirst(text, /torre\s*:?\s*([A-Za-z0-9]+)/i, 1) ||
+    extractFirst(text, /bloco\s*:?\s*([A-Za-z0-9]+)/i, 1) ||
+    extractFirst(fileName, /apto\s*[0-9]{3,4}\s*([A-Za-z])/i, 1) ||
+    extractFirst(fileName, /(?:^|[^0-9])([0-9]{3,4})\s*([A-Za-z])\.docx$/i, 2) ||
+    extractFirst(fileName, /(?:^|[^0-9])([0-9]{3,4})\s*([A-Za-z])\.pdf$/i, 2) ||
+    extractFirst(fileName, /([A-Za-z])\.docx$/i, 1) ||
+    extractFirst(fileName, /([A-Za-z])\.pdf$/i, 1) ||
     ""
   ).toUpperCase();
 }
 
-function extractFirst(text, regex) {
+function extractApto(fileName, text) {
+  return (
+    extractFirst(fileName, /apto\s*([0-9]{3,4})/i, 1) ||
+    extractFirst(text, /Local da inspeção\s*:?\s*([0-9]{3,4})/i, 1) ||
+    extractFirst(fileName, /(?:^|[^0-9])([0-9]{3,4})\s*[A-Za-z]\.(?:docx|pdf)$/i, 1) ||
+    extractFirst(fileName, /(?:^|[^0-9])([0-9]{3,4})(?:\s|\.|$)/i, 1) ||
+    ""
+  );
+}
+
+function extractFirst(text, regex, groupIndex = 1) {
   const match = String(text || "").match(regex);
-  return match?.[1]?.trim() || "";
+  return match?.[groupIndex]?.trim() || "";
 }
 
 function extractResultTokens(segment) {
@@ -1037,7 +1076,7 @@ function buildCombinedReport(allRows, consolidatedByTower, metrics, selectedTowe
   const byTowerText = consolidatedByTower
     .map(
       (t) =>
-        `- Torre ${t.torre}: ${t.apartamentos} aptos, ${t.reproved} R, ${t.approved} A, ${t.nv} NV, ${t.na} NA, TAPI ${t.tapi}%`
+        `- Torre ${t.torre}: ${t.apartamentos} unidades, ${t.reproved} R, ${t.approved} A, ${t.nv} NV, ${t.na} NA, TAPI ${t.tapi}%`
     )
     .join("\n");
 
@@ -1047,7 +1086,7 @@ ESCOPO
 ${scopeLabel}
 
 RESUMO GERAL
-- Aptos inspecionados: ${metrics.apartments}
+- Unidades inspecionadas: ${metrics.apartments}
 - Aprovadas: ${metrics.approved}
 - Reprovadas: ${metrics.reproved}
 - Não verificadas: ${metrics.nv}
