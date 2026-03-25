@@ -811,9 +811,116 @@ function parseFvsText(fileName, rawText) {
   return rows;
 }
 
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const headers = splitCSVLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const values = splitCSVLine(line);
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = values[i] || "";
+    });
+    return obj;
+  });
+}
+
+function splitCSVLine(line) {
+  const result = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+    } else if (char === "," && !insideQuotes) {
+      result.push(cleanCSV(current));
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  result.push(cleanCSV(current));
+  return result;
+}
+
+function cleanCSV(value) {
+  return value.replace(/^"|"$/g, "").trim();
+}
+
+function parseFvsText(fileName, rawText) {
+  const text = normalizeSpaces(rawText);
+
+  const apto =
+    extractFirst(fileName, /apto\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
+    extractFirst(text, /Local da inspeção\s*:?\s*([0-9]{3,4}\s*[A-Za-z]?)/i) ||
+    "";
+
+  const data =
+    extractFirst(text, /DATA\s*:?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i) || "";
+
+  const responsavel =
+    extractFirst(text, /Responsável\s*:?\s*([A-Za-zÀ-ÿ ]{3,80})/i) || "";
+
+  const servico =
+    extractFirst(
+      text,
+      /Serviço\s*:?\s*([A-Za-zÀ-ÿ0-9 ,\-]+?)(?=Responsável|Local da inspeção|INSPEÇÕES)/i
+    ) || "Revestimento Cerâmico";
+
+  const rows = [];
+
+  for (const criterio of CRITERIOS) {
+    const match = findCriterionSegment(text, criterio);
+    if (!match) continue;
+
+    const tokens = extractResultTokens(match);
+    if (!tokens.length) continue;
+
+    for (let i = 0; i < Math.min(tokens.length, AMBIENTES_PADRAO.length); i += 1) {
+      rows.push({
+        apto: sanitize(apto),
+        pav: inferPavimento(apto),
+        data,
+        ambiente: AMBIENTES_PADRAO[i],
+        criterio,
+        resultado: normResult(tokens[i]),
+        observacao: "",
+        equipe: responsavel,
+        servico: sanitize(servico),
+        fonte: fileName,
+      });
+    }
+  }
+
+  return rows;
+}
+
+function findCriterionSegment(text, criterio) {
+  const idx = text.toLowerCase().indexOf(criterio.toLowerCase());
+  if (idx === -1) return "";
+  return text.slice(idx, idx + 320);
+}
+
+function extractFirst(text, regex) {
+  const match = String(text || "").match(regex);
+  return match?.[1]?.trim() || "";
+}
+
 function extractResultTokens(segment) {
   const matches = segment.match(/N\/V|N\/A|\bA\b|\bR\b|-/gi) || [];
   return matches.map((m) => m.toUpperCase());
+}
+
+function normResult(value) {
+  const v = String(value || "").trim().toUpperCase();
+  if (v === "A") return "A";
+  if (v === "R") return "R";
+  if (v === "N/V" || v === "NV") return "NV";
+  if (v === "N/A" || v === "NA" || v === "-") return "NA";
+  return v;
 }
 
 function normalizeSpaces(value) {
@@ -827,7 +934,10 @@ function normalizeSpaces(value) {
 function inferPavimento(apto) {
   const match = String(apto).match(/\d{3,4}/);
   if (!match) return "";
-
   const num = Number(match[0]);
   return `${Math.floor(num / 100)}º`;
+}
+
+function sanitize(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
