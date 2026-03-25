@@ -3,75 +3,71 @@ import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.worker.min.mjs`;
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.worker.min.mjs";
 
 export default function App() {
   const [rows, setRows] = useState([]);
   const [rawText, setRawText] = useState("");
-  const [status, setStatus] = useState("Envie um arquivo CSV, XLSX, DOCX ou PDF.");
-  const [fileName, setFileName] = useState("");
+  const [status, setStatus] = useState("Envie arquivos (CSV, XLSX, DOCX, PDF).");
+  const [fileNames, setFileNames] = useState([]);
 
   async function handleFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
 
-    setFileName(file.name);
     setRows([]);
     setRawText("");
-    setStatus("Lendo arquivo...");
+    setFileNames(files.map((f) => f.name));
+    setStatus("Lendo arquivos...");
 
-    const extension = file.name.split(".").pop()?.toLowerCase();
+    let allRows = [];
+    let allText = "";
 
     try {
-      if (extension === "csv") {
-        const text = await file.text();
-        const parsed = parseCSV(text);
-        setRows(parsed);
-        setStatus(`CSV lido com ${parsed.length} linha(s).`);
-        return;
-      }
+      for (const file of files) {
+        const extension = file.name.split(".").pop()?.toLowerCase();
 
-      if (extension === "xlsx" || extension === "xls") {
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array" });
-        const sheetName = workbook.SheetNames[0];
-        const json = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-          defval: "",
-        });
-        setRows(json);
-        setStatus(`Planilha lida com ${json.length} linha(s).`);
-        return;
-      }
-
-      if (extension === "docx") {
-        const buffer = await file.arrayBuffer();
-        const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-        setRawText(result.value || "");
-        setStatus("DOCX lido. Texto extraído exibido abaixo.");
-        return;
-      }
-
-      if (extension === "pdf") {
-        const buffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-
-        let text = "";
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
-          const page = await pdf.getPage(pageNum);
-          const content = await page.getTextContent();
-          const pageText = content.items.map((item) => item.str).join(" ");
-          text += `\n\n--- PÁGINA ${pageNum} ---\n\n${pageText}`;
+        if (extension === "csv") {
+          const text = await file.text();
+          const parsed = parseCSV(text);
+          allRows = [...allRows, ...parsed];
         }
 
-        setRawText(text);
-        setStatus("PDF lido. Texto extraído exibido abaixo.");
-        return;
+        else if (extension === "xlsx" || extension === "xls") {
+          const buffer = await file.arrayBuffer();
+          const workbook = XLSX.read(buffer, { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+          allRows = [...allRows, ...json];
+        }
+
+        else if (extension === "docx") {
+          const buffer = await file.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+          allText += `\n\n===== ${file.name} =====\n\n${result.value}`;
+        }
+
+        else if (extension === "pdf") {
+          const buffer = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const content = await page.getTextContent();
+            const pageText = content.items.map((item) => item.str).join(" ");
+            allText += `\n\n===== ${file.name} - Página ${pageNum} =====\n\n${pageText}`;
+          }
+        }
       }
 
-      setStatus("Formato não suportado.");
+      if (allRows.length > 0) setRows(allRows);
+      if (allText) setRawText(allText);
+
+      setStatus(`Processados ${files.length} arquivo(s).`);
     } catch (error) {
       console.error(error);
-      setStatus(`Erro ao ler o arquivo: ${error.message}`);
+      setStatus("Erro ao processar arquivos.");
     }
   }
 
@@ -82,99 +78,50 @@ export default function App() {
         background: "#0f172a",
         color: "white",
         padding: "40px",
-        fontFamily: "Arial, sans-serif",
+        fontFamily: "Arial",
       }}
     >
       <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
-        <div
-          style={{
-            display: "inline-block",
-            padding: "8px 14px",
-            borderRadius: "999px",
-            background: "#082f49",
-            color: "#7dd3fc",
-            fontSize: "14px",
-            fontWeight: "bold",
-            marginBottom: "20px",
-          }}
-        >
-          FVS Qualidade
+        <h1>FVS Qualidade — Multi Upload</h1>
+
+        <input
+          type="file"
+          multiple
+          accept=".csv,.xlsx,.xls,.docx,.pdf"
+          onChange={handleFile}
+          style={{ marginTop: 20 }}
+        />
+
+        <div style={{ marginTop: 20 }}>
+          <strong>Arquivos:</strong>
+          <ul>
+            {fileNames.map((name, i) => (
+              <li key={i}>{name}</li>
+            ))}
+          </ul>
         </div>
 
-        <h1 style={{ fontSize: "44px", marginBottom: "16px" }}>
-          Leitura de CSV, XLSX, DOCX e PDF
-        </h1>
-
-        <p
-          style={{
-            fontSize: "18px",
-            color: "#cbd5e1",
-            lineHeight: 1.6,
-            maxWidth: "900px",
-          }}
-        >
-          Esta versão serve para testar a extração dos arquivos. Primeiro vamos
-          confirmar que o texto do DOCX e do PDF aparece corretamente. Depois
-          partimos para o parser da FVS.
-        </p>
-
-        <div
-          style={{
-            marginTop: "28px",
-            background: "white",
-            color: "#0f172a",
-            borderRadius: "20px",
-            padding: "24px",
-          }}
-        >
-          <input
-            type="file"
-            accept=".csv,.xlsx,.xls,.docx,.pdf"
-            onChange={handleFile}
-            style={{ marginBottom: "16px" }}
-          />
-
-          <div style={{ marginBottom: "8px", fontWeight: "bold" }}>
-            Arquivo:
-          </div>
-          <div style={{ marginBottom: "16px" }}>
-            {fileName || "Nenhum arquivo selecionado"}
-          </div>
-
-          <div style={{ marginBottom: "8px", fontWeight: "bold" }}>Status:</div>
-          <div>{status}</div>
+        <div style={{ marginTop: 10 }}>
+          <strong>Status:</strong> {status}
         </div>
 
         {rows.length > 0 && (
           <div
             style={{
-              marginTop: "28px",
+              marginTop: 30,
               background: "white",
-              color: "#0f172a",
-              borderRadius: "20px",
-              padding: "24px",
+              color: "black",
+              padding: 20,
+              borderRadius: 10,
               overflowX: "auto",
             }}
           >
-            <h2 style={{ marginTop: 0 }}>Pré-visualização da tabela</h2>
-
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-              }}
-            >
+            <h2>Tabela combinada</h2>
+            <table>
               <thead>
                 <tr>
                   {Object.keys(rows[0]).map((key) => (
-                    <th
-                      key={key}
-                      style={{
-                        borderBottom: "1px solid #ccc",
-                        padding: "10px",
-                        textAlign: "left",
-                      }}
-                    >
+                    <th key={key} style={{ padding: 8 }}>
                       {key}
                     </th>
                   ))}
@@ -184,14 +131,7 @@ export default function App() {
                 {rows.slice(0, 10).map((row, i) => (
                   <tr key={i}>
                     {Object.values(row).map((val, j) => (
-                      <td
-                        key={j}
-                        style={{
-                          borderBottom: "1px solid #eee",
-                          padding: "10px",
-                          verticalAlign: "top",
-                        }}
-                      >
+                      <td key={j} style={{ padding: 8 }}>
                         {String(val)}
                       </td>
                     ))}
@@ -205,25 +145,15 @@ export default function App() {
         {rawText && (
           <div
             style={{
-              marginTop: "28px",
+              marginTop: 30,
               background: "white",
-              color: "#0f172a",
-              borderRadius: "20px",
-              padding: "24px",
+              color: "black",
+              padding: 20,
+              borderRadius: 10,
             }}
           >
-            <h2 style={{ marginTop: 0 }}>Texto extraído</h2>
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontFamily: "monospace",
-                fontSize: "14px",
-                lineHeight: 1.5,
-              }}
-            >
-              {rawText}
-            </pre>
+            <h2>Texto extraído (DOCX/PDF)</h2>
+            <pre style={{ whiteSpace: "pre-wrap" }}>{rawText}</pre>
           </div>
         )}
       </div>
@@ -232,43 +162,17 @@ export default function App() {
 }
 
 function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (!lines.length) return [];
 
-  const headers = splitCSVLine(lines[0]);
+  const headers = lines[0].split(",");
 
   return lines.slice(1).map((line) => {
-    const values = splitCSVLine(line);
-    const row = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
+    const values = line.split(",");
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = values[i] || "";
     });
-    return row;
+    return obj;
   });
-}
-
-function splitCSVLine(line) {
-  const result = [];
-  let current = "";
-  let insideQuotes = false;
-
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-
-    if (char === '"') {
-      insideQuotes = !insideQuotes;
-    } else if (char === "," && !insideQuotes) {
-      result.push(cleanCSVValue(current));
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  result.push(cleanCSVValue(current));
-  return result;
-}
-
-function cleanCSVValue(value) {
-  return value.replace(/^"|"$/g, "").trim();
 }
