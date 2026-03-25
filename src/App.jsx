@@ -9,8 +9,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 export default function App() {
   const [rows, setRows] = useState([]);
   const [rawText, setRawText] = useState("");
-  const [status, setStatus] = useState("Envie arquivos (CSV, XLSX, DOCX, PDF).");
+  const [status, setStatus] = useState("");
   const [fileNames, setFileNames] = useState([]);
+  const [errors, setErrors] = useState([]);
 
   async function handleFile(e) {
     const files = Array.from(e.target.files || []);
@@ -18,23 +19,25 @@ export default function App() {
 
     setRows([]);
     setRawText("");
+    setErrors([]);
     setFileNames(files.map((f) => f.name));
-    setStatus("Lendo arquivos...");
+    setStatus("Processando arquivos...");
 
     let allRows = [];
     let allText = "";
+    let errorList = [];
 
-    try {
-      for (const file of files) {
-        const extension = file.name.split(".").pop()?.toLowerCase();
+    for (const file of files) {
+      try {
+        const ext = file.name.split(".").pop()?.toLowerCase();
 
-        if (extension === "csv") {
+        if (ext === "csv") {
           const text = await file.text();
           const parsed = parseCSV(text);
           allRows = [...allRows, ...parsed];
         }
 
-        else if (extension === "xlsx" || extension === "xls") {
+        else if (ext === "xlsx" || ext === "xls") {
           const buffer = await file.arrayBuffer();
           const workbook = XLSX.read(buffer, { type: "array" });
           const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -42,137 +45,82 @@ export default function App() {
           allRows = [...allRows, ...json];
         }
 
-        else if (extension === "docx") {
+        else if (ext === "docx") {
           const buffer = await file.arrayBuffer();
           const result = await mammoth.extractRawText({ arrayBuffer: buffer });
           allText += `\n\n===== ${file.name} =====\n\n${result.value}`;
         }
 
-        else if (extension === "pdf") {
+        else if (ext === "pdf") {
           const buffer = await file.arrayBuffer();
           const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
 
-          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-            const page = await pdf.getPage(pageNum);
+          for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
             const content = await page.getTextContent();
-            const pageText = content.items.map((item) => item.str).join(" ");
-            allText += `\n\n===== ${file.name} - Página ${pageNum} =====\n\n${pageText}`;
+            const text = content.items.map((i) => i.str).join(" ");
+            allText += `\n\n===== ${file.name} - Página ${p} =====\n\n${text}`;
           }
         }
+
+        else {
+          errorList.push(`${file.name}: formato não suportado`);
+        }
+
+      } catch (err) {
+        console.error(err);
+        errorList.push(`${file.name}: erro ao ler`);
       }
-
-      if (allRows.length > 0) setRows(allRows);
-      if (allText) setRawText(allText);
-
-      setStatus(`Processados ${files.length} arquivo(s).`);
-    } catch (error) {
-      console.error(error);
-      setStatus("Erro ao processar arquivos.");
     }
+
+    if (allRows.length) setRows(allRows);
+    if (allText) setRawText(allText);
+    if (errorList.length) setErrors(errorList);
+
+    setStatus(`Processados ${files.length} arquivo(s).`);
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#0f172a",
-        color: "white",
-        padding: "40px",
-        fontFamily: "Arial",
-      }}
-    >
-      <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
-        <h1>FVS Qualidade — Multi Upload</h1>
+    <div style={{ padding: 40, background: "#0f172a", color: "white" }}>
+      <h1>FVS Qualidade — Multi Upload</h1>
 
-        <input
-          type="file"
-          multiple
-          accept=".csv,.xlsx,.xls,.docx,.pdf"
-          onChange={handleFile}
-          style={{ marginTop: 20 }}
-        />
+      <input type="file" multiple onChange={handleFile} />
 
-        <div style={{ marginTop: 20 }}>
-          <strong>Arquivos:</strong>
-          <ul>
-            {fileNames.map((name, i) => (
-              <li key={i}>{name}</li>
-            ))}
-          </ul>
-        </div>
-
-        <div style={{ marginTop: 10 }}>
-          <strong>Status:</strong> {status}
-        </div>
-
-        {rows.length > 0 && (
-          <div
-            style={{
-              marginTop: 30,
-              background: "white",
-              color: "black",
-              padding: 20,
-              borderRadius: 10,
-              overflowX: "auto",
-            }}
-          >
-            <h2>Tabela combinada</h2>
-            <table>
-              <thead>
-                <tr>
-                  {Object.keys(rows[0]).map((key) => (
-                    <th key={key} style={{ padding: 8 }}>
-                      {key}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.slice(0, 10).map((row, i) => (
-                  <tr key={i}>
-                    {Object.values(row).map((val, j) => (
-                      <td key={j} style={{ padding: 8 }}>
-                        {String(val)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {rawText && (
-          <div
-            style={{
-              marginTop: 30,
-              background: "white",
-              color: "black",
-              padding: 20,
-              borderRadius: 10,
-            }}
-          >
-            <h2>Texto extraído (DOCX/PDF)</h2>
-            <pre style={{ whiteSpace: "pre-wrap" }}>{rawText}</pre>
-          </div>
-        )}
+      <div>
+        <h3>Arquivos:</h3>
+        {fileNames.map((f, i) => (
+          <div key={i}>{f}</div>
+        ))}
       </div>
+
+      <p>Status: {status}</p>
+
+      {errors.length > 0 && (
+        <div style={{ color: "red" }}>
+          <h3>Erros:</h3>
+          {errors.map((e, i) => (
+            <div key={i}>{e}</div>
+          ))}
+        </div>
+      )}
+
+      {rawText && (
+        <div style={{ background: "white", color: "black", padding: 20 }}>
+          <h3>Texto extraído</h3>
+          <pre>{rawText}</pre>
+        </div>
+      )}
     </div>
   );
 }
 
 function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
-
+  const lines = text.split("\n").filter((l) => l.trim());
   const headers = lines[0].split(",");
-
   return lines.slice(1).map((line) => {
     const values = line.split(",");
     const obj = {};
-    headers.forEach((h, i) => {
-      obj[h] = values[i] || "";
-    });
+    headers.forEach((h, i) => (obj[h] = values[i]));
     return obj;
   });
 }
